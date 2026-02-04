@@ -1,0 +1,19 @@
+# Git Ignore
+# This is where you put the files you want git to ignore.
+# You can delete this file if you don't need it.
+
+# Ignore Node Modules
+node_modules
+
+# Ignore Build Output
+dist
+
+# Ignore Cache
+.cache
+
+# Ignore Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local 
+.env.production.local
