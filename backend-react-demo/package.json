@@ -1,0 +1,11 @@
+{
+  "name": "backend-react-demo",
+  "version": "1.0.0",
+  "description": "Backend React Demo",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Welcome to Backend Demo!\""
+  },
+  "author": "",
+  "license": "MIT"
+}
