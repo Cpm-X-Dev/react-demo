@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "echo \"Welcome to Backend Demo!\"",
-    "dev":  "tsx src/server.ts"
+    "dev":  "tsx --watch src/server.ts"
   },
   "author": "",
   "license": "MIT",
