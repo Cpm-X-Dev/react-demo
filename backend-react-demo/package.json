@@ -17,6 +17,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "shared-types": "file:../shared-types",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "nodemon": "^3.1.11",
