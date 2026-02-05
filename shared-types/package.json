@@ -8,6 +8,12 @@
     "build": "npx tsc",
     "test": "echo \"Hello, World!\""
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "main": "./dist/index.js"
+    }
+  },
   "author": "",
   "license": "MIT",
   "dependencies": {
