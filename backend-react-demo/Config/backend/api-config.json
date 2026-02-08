@@ -14,5 +14,15 @@
         "allowedHeaders": "Content-Type,Authorization",
         "credentials": true,
         "maxAge": 86400
+    },
+    "authConfig": {
+        "accessTokenSecret": "your_access_token_secret",
+        "refreshTokenSecret": "your_refresh_token_secret",
+        "accessTokenExpiry": "15m",
+        "refreshTokenExpiry": "7d",
+        "refreshTokenCookieName": "refreshToken"
+    },
+    "demoSettings": {
+        "useMockData": true
     }
 }

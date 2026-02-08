@@ -1,6 +1,9 @@
+import { exit } from "node:process";
+import bcrypt from "bcryptjs";
 import { getApiConfig } from "./_Config/getApiConfig.js";
 import { loadRoutes } from "./_Routes/index.js";
 import { buildApplication } from "./app.js";
+import { initializeMockUsers } from "./_Models/_Mocks/mockUsers.js";
 
 const startServer = async () => {
     const apiConfig = getApiConfig();
@@ -8,6 +11,9 @@ const startServer = async () => {
     if (!apiConfig) {
         throw new Error("Error. API Configuration is not loaded. Server startup failed.");
     }
+
+    // Initialize mock users with bcrypt hashing
+    await initializeMockUsers((password) => bcrypt.hash(password, 10));
 
     const app = buildApplication();
     const PORT = 4000;

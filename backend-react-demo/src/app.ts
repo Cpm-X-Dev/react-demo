@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 
 const CORS_OPTIONS = {
     origin: "http://localhost:3000",
@@ -14,6 +15,8 @@ const buildApplication = (): Express => {
     
     // This is the CORS Configuration
     app.use(cors(CORS_OPTIONS));
+    // This is the Cookie Parser
+    app.use(cookieParser());
     // This is the JSON Parser
     app.use(express.json());
 
