@@ -1,4 +1,3 @@
-import { exit } from "node:process";
 import bcrypt from "bcryptjs";
 import { getApiConfig } from "./_Config/getApiConfig.js";
 import { loadRoutes } from "./_Routes/index.js";
