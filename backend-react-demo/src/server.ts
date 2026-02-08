@@ -12,8 +12,11 @@ const startServer = async () => {
         throw new Error("Error. API Configuration is not loaded. Server startup failed.");
     }
 
-    // Initialize mock users with bcrypt hashing
-    await initializeMockUsers((password) => bcrypt.hash(password, 10));
+    if (apiConfig.demoSettings.useMockData) {
+        console.warn("⚠️  [DEMO] Using mock data. Set USE_MOCK_DATA to false in production!");
+        // Initialize mock users with bcrypt hashing
+        await initializeMockUsers((password) => bcrypt.hash(password, 10));
+    }
 
     const app = buildApplication();
     const PORT = 4000;

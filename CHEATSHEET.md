@@ -191,3 +191,275 @@ Asymmetric solves the "how do we share a key safely" problem. Symmetric solves t
 - **Encryption is not authentication.** Encrypting data proves no one can read it in transit. It doesn't prove who sent it. That's what signing (HMAC, RSA signatures, JWTs) is for.
 - **Symmetric key storage matters.** If you use AES to encrypt database fields, the key must be stored securely (environment variable, secrets manager) — not in your codebase.
 - **Asymmetric is not for bulk data.** RSA has a maximum payload size tied to key length (e.g., 245 bytes for a 2048-bit key). For large data, encrypt with AES and use asymmetric encryption only for the AES key — which is exactly what TLS does.
+
+---
+
+## What is JWT?
+
+**JWT (JSON Web Token)** is a compact, URL-safe token format for securely transmitting claims between parties. It's a string that looks like this:
+
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ1c2VyLTEiLCJlbWFpbCI6ImRlbW9AZXhhbXBsZS5jb20iLCJyb2xlIjoidXNlciJ9.abc123signature
+```
+
+### Structure: Three Parts Separated by Dots
+
+```
+HEADER.PAYLOAD.SIGNATURE
+```
+
+| Part | Purpose | Example (decoded) |
+|------|---------|-------------------|
+| **Header** | Algorithm & token type | `{"alg": "HS256", "typ": "JWT"}` |
+| **Payload** | Claims (user data) | `{"userId": "user-1", "email": "demo@example.com", "exp": 1699999999}` |
+| **Signature** | Verification hash | Created by signing header + payload with a secret |
+
+### How the Signature Works
+
+```
+HMACSHA256(
+  base64UrlEncode(header) + "." + base64UrlEncode(payload),
+  secret
+)
+```
+
+The signature ensures:
+- **Integrity** — if anyone modifies the payload, the signature won't match
+- **Authenticity** — only someone with the secret could have created it
+
+### Important: JWTs Are Signed, Not Encrypted
+
+Anyone can decode a JWT and read the payload (it's just Base64). The signature only proves it wasn't tampered with. **Never put secrets in a JWT payload.**
+
+```ts
+// Anyone can decode this
+const payload = JSON.parse(atob(token.split('.')[1]));
+// { userId: "user-1", email: "demo@example.com", ... }
+```
+
+### Common Claims
+
+| Claim | Name | Purpose |
+|-------|------|---------|
+| `exp` | Expiration | Unix timestamp when token expires |
+| `iat` | Issued At | Unix timestamp when token was created |
+| `sub` | Subject | Who the token is about (usually user ID) |
+| `iss` | Issuer | Who issued the token |
+| Custom | — | Your app-specific data (`userId`, `role`, etc.) |
+
+---
+
+## JWT Token-Based Authentication
+
+### Why Use Tokens Instead of Sessions?
+
+| Aspect | Session-Based | Token-Based (JWT) |
+|--------|---------------|-------------------|
+| **State** | Server stores session data | Stateless — token contains all info |
+| **Scaling** | Needs shared session store (Redis) | No server state to sync |
+| **Mobile/API** | Cookies can be problematic | Works anywhere (headers) |
+| **Revocation** | Easy — delete session | Hard — token valid until expiry |
+
+### The Two-Token Pattern
+
+Modern auth uses two tokens with different lifetimes:
+
+| Token | Lifetime | Storage | Purpose |
+|-------|----------|---------|---------|
+| **Access Token** | Short (15 min) | Memory (JS variable) | Authorize API requests |
+| **Refresh Token** | Long (7 days) | httpOnly cookie | Get new access tokens |
+
+**Why two tokens?**
+- Access tokens are sent with every request → higher exposure risk → short lifetime limits damage
+- Refresh tokens are only sent to `/auth/refresh` → lower exposure → can live longer
+- If access token leaks, attacker has 15 minutes. If refresh token leaks (harder), you can revoke it server-side.
+
+### Storage Security
+
+| Storage | XSS Safe | CSRF Safe | Recommendation |
+|---------|----------|-----------|----------------|
+| `localStorage` | No | Yes | Never for tokens |
+| `sessionStorage` | No | Yes | Never for tokens |
+| JS Memory | Yes | Yes | Access token |
+| `httpOnly` cookie | Yes | No* | Refresh token |
+
+*httpOnly cookies need CSRF protection, but `SameSite=Strict` handles most cases.
+
+---
+
+## Authentication Flow
+
+### Login Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              LOGIN FLOW                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  Browser                                              Backend
+     │                                                    │
+     │  POST /v1/auth/login                               │
+     │  { email, password }                               │
+     │ ─────────────────────────────────────────────────► │
+     │                                                    │
+     │                                    Validate credentials
+     │                                    Generate access token (15 min)
+     │                                    Generate refresh token (7 days)
+     │                                    Store refresh token in DB/memory
+     │                                                    │
+     │  { accessToken, user }                             │
+     │  + Set-Cookie: refreshToken (httpOnly)             │
+     │ ◄───────────────────────────────────────────────── │
+     │                                                    │
+     │  Store accessToken in memory                       │
+     │  (JS variable, React state/context)                │
+     ▼                                                    ▼
+```
+
+### API Request Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           API REQUEST FLOW                               │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  Browser                                              Backend
+     │                                                    │
+     │  GET /v1/protected/resource                        │
+     │  Authorization: Bearer <accessToken>               │
+     │ ─────────────────────────────────────────────────► │
+     │                                                    │
+     │                                    Verify JWT signature
+     │                                    Check expiration
+     │                                    Extract user from payload
+     │                                                    │
+     │  200 OK { data }                                   │
+     │ ◄───────────────────────────────────────────────── │
+     ▼                                                    ▼
+```
+
+### Token Refresh Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          TOKEN REFRESH FLOW                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  Browser                                              Backend
+     │                                                    │
+     │  Access token expired or 401 received              │
+     │                                                    │
+     │  POST /v1/auth/refresh                             │
+     │  Cookie: refreshToken (sent automatically)         │
+     │ ─────────────────────────────────────────────────► │
+     │                                                    │
+     │                                    Verify refresh token JWT
+     │                                    Check if token in store (not revoked)
+     │                                    Generate NEW access token
+     │                                    Generate NEW refresh token (rotation)
+     │                                    Revoke old refresh token
+     │                                    Store new refresh token
+     │                                                    │
+     │  { accessToken }                                   │
+     │  + Set-Cookie: refreshToken (new)                  │
+     │ ◄───────────────────────────────────────────────── │
+     │                                                    │
+     │  Store new accessToken in memory                   │
+     │  Retry original failed request                     │
+     ▼                                                    ▼
+```
+
+### Logout Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                             LOGOUT FLOW                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  Browser                                              Backend
+     │                                                    │
+     │  POST /v1/auth/logout                              │
+     │  Cookie: refreshToken                              │
+     │ ─────────────────────────────────────────────────► │
+     │                                                    │
+     │                                    Revoke refresh token from store
+     │                                    Clear cookie
+     │                                                    │
+     │  200 OK                                            │
+     │  + Set-Cookie: refreshToken="" (cleared)           │
+     │ ◄───────────────────────────────────────────────── │
+     │                                                    │
+     │  Clear accessToken from memory                     │
+     │  Redirect to login                                 │
+     ▼                                                    ▼
+```
+
+### Complete Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    COMPLETE AUTHENTICATION LIFECYCLE                     │
+└─────────────────────────────────────────────────────────────────────────┘
+
+                                 ┌─────────┐
+                                 │  START  │
+                                 └────┬────┘
+                                      │
+                                      ▼
+                            ┌───────────────────┐
+                            │  Has refresh      │
+                            │  token cookie?    │
+                            └────────┬──────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    │ No                              │ Yes
+                    ▼                                 ▼
+            ┌───────────────┐               ┌───────────────────┐
+            │  Show Login   │               │  Call /refresh    │
+            │  Page         │               └─────────┬─────────┘
+            └───────┬───────┘                         │
+                    │                    ┌────────────┴────────────┐
+                    │                    │ Success                 │ Fail
+                    ▼                    ▼                         ▼
+            ┌───────────────┐   ┌───────────────────┐      ┌─────────────┐
+            │  User enters  │   │  Store access     │      │ Clear cookie│
+            │  credentials  │   │  token in memory  │      │ Show login  │
+            └───────┬───────┘   └─────────┬─────────┘      └─────────────┘
+                    │                     │
+                    ▼                     ▼
+            ┌───────────────┐   ┌───────────────────┐
+            │  POST /login  │   │  USER IS          │◄─────────────┐
+            └───────┬───────┘   │  AUTHENTICATED    │              │
+                    │           └─────────┬─────────┘              │
+                    │                     │                        │
+                    │                     ▼                        │
+                    │           ┌───────────────────┐              │
+                    │           │  Make API calls   │              │
+                    │           │  with access token│              │
+                    │           └─────────┬─────────┘              │
+                    │                     │                        │
+                    │        ┌────────────┴────────────┐           │
+                    │        │ 401?                    │ Success   │
+                    │        ▼                         ▼           │
+                    │  ┌───────────┐            ┌───────────┐      │
+                    │  │ /refresh  │────────────│  Continue │      │
+                    │  └───────────┘  Success   └───────────┘      │
+                    │        │                                     │
+                    │        │ Fail                                │
+                    │        ▼                                     │
+                    │  ┌───────────┐                               │
+                    └─►│  Logout   │───────────────────────────────┘
+                       │  /login   │        (with new tokens)
+                       └───────────┘
+```
+
+### Key Security Points
+
+| Point | Implementation |
+|-------|----------------|
+| Access token in memory | Not accessible via XSS on other tabs; cleared on page close |
+| Refresh token httpOnly | JavaScript cannot read it; only sent to `/auth/refresh` |
+| Token rotation | Each refresh issues new refresh token, revokes old one |
+| Short access token life | 15 minutes limits damage if token leaks |
+| Server-side revocation | Refresh tokens stored in DB/memory; can be invalidated |
+| SameSite=Strict cookie | Prevents CSRF by not sending cookie cross-origin |
