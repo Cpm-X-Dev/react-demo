@@ -68,6 +68,14 @@ Quick reference for topics covered in the React Demo bootcamp.
   - [Quick Reference: Cookie Security Checklist](#quick-reference-cookie-security-checklist)
   - [Common Pitfalls](#common-pitfalls-1)
   - [Visual: Cookie Lifecycle](#visual-cookie-lifecycle)
+- [Stateful vs Stateless Architecture](#stateful-vs-stateless-architecture)
+  - [What is State?](#what-is-state)
+  - [Stateful vs Stateless Comparison](#stateful-vs-stateless-comparison)
+  - [Stateful Architecture](#stateful-architecture)
+  - [Stateless Architecture](#stateless-architecture)
+  - [Hybrid Approach in This Codebase](#hybrid-approach-in-this-codebase)
+  - [Decision Matrix: When to Choose Which](#decision-matrix-when-to-choose-which)
+  - [Common Misconceptions](#common-misconceptions)
 
 ---
 
@@ -1793,5 +1801,723 @@ fetch("http://localhost:4000/v1/auth/refresh", {
    │
    └─► expiresAt reached → RefreshTokenStore.validate() returns false
 ```
+
+---
+
+## Stateful vs Stateless Architecture
+
+> State refers to data that persists between requests. Stateful architectures remember past interactions server-side, while stateless architectures treat each request as independent.
+
+### What is State?
+
+**State** is information about a user, session, or transaction that the server remembers across multiple requests. In web applications, HTTP is inherently stateless — each request is independent and contains no memory of previous requests.
+
+Examples of state:
+- User login status ("Is this user authenticated?")
+- Shopping cart contents ("What items has this user added?")
+- Multi-step form progress ("Which step is the user on?")
+- Active WebSocket connections ("Which users are connected right now?")
+- Database connection pools ("Which connections are available?")
+
+### Stateful vs Stateless Comparison
+
+| Aspect | Stateful | Stateless |
+|--------|----------|-----------|
+| **Server memory** | Remembers previous requests | No memory of previous requests |
+| **Session storage** | Server stores session data (in-memory, Redis, database) | No server-side session storage |
+| **Request context** | Minimal — server already knows the context | Complete — every request contains all needed information |
+| **Scaling** | Complex — sessions must be shared across servers | Simple — any server can handle any request |
+| **Failure recovery** | Lost state means broken user experience | No state to lose — requests are self-contained |
+| **Performance** | Fast lookups (session ID → data) | No lookup needed (data in request) |
+| **Examples** | Sessions, WebSockets, database connections | REST APIs, JWT tokens, HTTP |
+
+### Stateful Architecture
+
+#### How It Works
+
+The server stores session data and uses an identifier (session ID) to retrieve it on subsequent requests.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     STATEFUL ARCHITECTURE                        │
+└─────────────────────────────────────────────────────────────────┘
+
+  Client                          Server                    Session Store
+    │                               │                             │
+    │  POST /login                  │                             │
+    │  { email, password }          │                             │
+    │ ───────────────────────────►  │                             │
+    │                               │                             │
+    │                          Validate credentials               │
+    │                          Generate session ID                │
+    │                               │                             │
+    │                               │  Store session data         │
+    │                               │  sessionId=abc123           │
+    │                               │ ─────────────────────────►  │
+    │                               │                             │
+    │                               │  {                          │
+    │                               │    userId: "user-1",        │
+    │                               │    email: "user@example",   │
+    │                               │    loginTime: Date,         │
+    │                               │    cart: [...]              │
+    │                               │  }                          │
+    │                               │                             │
+    │  Set-Cookie: sessionId=abc123 │                             │
+    │ ◄─────────────────────────────│                             │
+    │                               │                             │
+    │  GET /profile                 │                             │
+    │  Cookie: sessionId=abc123     │                             │
+    │ ───────────────────────────►  │                             │
+    │                               │                             │
+    │                               │  Lookup session abc123      │
+    │                               │ ─────────────────────────►  │
+    │                               │                             │
+    │                               │ ◄─────────────────────────  │
+    │                               │  { userId: "user-1", ... }  │
+    │                               │                             │
+    │  200 OK { user profile }      │                             │
+    │ ◄─────────────────────────────│                             │
+    └                               └                             ┘
+```
+
+#### Examples
+
+**1. Traditional Session-Based Authentication**
+```ts
+// Server stores session
+const sessionStore = new Map<string, SessionData>();
+
+app.post("/login", (req, res) => {
+    const sessionId = generateUUID();
+    sessionStore.set(sessionId, {
+        userId: user.id,
+        email: user.email,
+        loginTime: new Date(),
+    });
+    res.cookie("sessionId", sessionId, { httpOnly: true });
+});
+
+app.get("/profile", (req, res) => {
+    const sessionId = req.cookies.sessionId;
+    const session = sessionStore.get(sessionId); // Stateful lookup
+    if (!session) return res.status(401).send("Not authenticated");
+
+    res.json({ userId: session.userId });
+});
+```
+
+**2. WebSocket Connections**
+```ts
+// Server tracks active connections
+const activeConnections = new Map<string, WebSocket>();
+
+wss.on("connection", (ws, req) => {
+    const userId = getUserIdFromRequest(req);
+    activeConnections.set(userId, ws); // Stateful storage
+
+    ws.on("close", () => {
+        activeConnections.delete(userId); // Remove state
+    });
+});
+
+// Send message to specific user
+function sendToUser(userId: string, message: string) {
+    const ws = activeConnections.get(userId); // Stateful lookup
+    if (ws) ws.send(message);
+}
+```
+
+**3. Database Connection Pools**
+```ts
+// Server maintains pool of connections
+const pool = new Pool({
+    host: "localhost",
+    database: "myapp",
+    max: 20, // Max 20 concurrent connections
+});
+
+// Connections are stateful — reused across requests
+const client = await pool.connect(); // Get existing connection
+const result = await client.query("SELECT * FROM users");
+client.release(); // Return to pool for reuse
+```
+
+#### Advantages
+
+| Advantage | Explanation |
+|-----------|-------------|
+| **Performance** | Session lookup is fast (O(1) in-memory or Redis) |
+| **Fine-grained control** | Can invalidate sessions instantly (logout, security breach) |
+| **Smaller requests** | Client only sends session ID, not full context |
+| **Server authority** | Server controls session data — client can't tamper |
+| **Rich session data** | Can store complex data structures server-side |
+| **Real-time capabilities** | WebSockets and long-polling require stateful connections |
+
+#### Disadvantages
+
+| Disadvantage | Explanation | Impact |
+|--------------|-------------|--------|
+| **Scaling complexity** | Sessions must be shared across multiple servers | Requires Redis, sticky sessions, or session replication |
+| **Memory usage** | Every active session consumes server memory | Limits concurrent users per server |
+| **Single point of failure** | If session store (Redis) goes down, all users logged out | Requires high-availability setup |
+| **Sticky sessions** | Load balancer must route user to same server | Reduces load balancing effectiveness |
+| **State loss on restart** | In-memory sessions lost on server restart | Requires persistent session store |
+| **Horizontal scaling** | Adding servers requires session synchronization | Complex infrastructure |
+
+#### Caveats
+
+**Production Warning: This Codebase Uses In-Memory Storage**
+```ts
+// RefreshTokenStore.ts
+const tokenStore = new Map<string, StoredToken[]>();
+```
+
+This works for development but has critical production issues:
+- All tokens lost on server restart
+- Doesn't work with multiple server instances (load balancing)
+- No cross-server session sharing
+
+**Production Solution:**
+```ts
+// Use Redis for shared session storage
+import Redis from "ioredis";
+const redis = new Redis();
+
+await redis.setex(`session:${sessionId}`, 3600, JSON.stringify(sessionData));
+const sessionData = JSON.parse(await redis.get(`session:${sessionId}`));
+```
+
+**Sticky Sessions Trade-off:**
+
+If using stateful architecture without shared storage:
+```
+Load Balancer (sticky sessions enabled)
+├── Server 1 (handles User A's sessions)
+├── Server 2 (handles User B's sessions)
+└── Server 3 (handles User C's sessions)
+```
+
+Pros: No session replication needed
+Cons: If Server 1 dies, User A is logged out
+
+### Stateless Architecture
+
+#### How It Works
+
+The server stores no session data. Every request contains all the information needed to process it. The server validates the request and responds without remembering anything.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    STATELESS ARCHITECTURE                        │
+└─────────────────────────────────────────────────────────────────┘
+
+  Client                          Server (no session storage)
+    │                               │
+    │  POST /login                  │
+    │  { email, password }          │
+    │ ───────────────────────────►  │
+    │                               │
+    │                          Validate credentials
+    │                          Generate JWT (self-contained)
+    │                          {
+    │                            userId: "user-1",
+    │                            email: "user@example",
+    │                            exp: timestamp + 15min
+    │                          }
+    │                          Sign with secret key
+    │                               │
+    │  { accessToken: "eyJ..." }    │
+    │ ◄─────────────────────────────│
+    │                               │
+    │  Store token in memory        │
+    │                               │
+    │  GET /profile                 │
+    │  Authorization: Bearer eyJ... │
+    │ ───────────────────────────►  │
+    │                               │
+    │                          Verify JWT signature
+    │                          Decode payload:
+    │                          { userId: "user-1", exp: ... }
+    │                          Check expiration
+    │                          [No database/Redis lookup!]
+    │                               │
+    │  200 OK { user profile }      │
+    │ ◄─────────────────────────────│
+    └                               └
+```
+
+#### Examples
+
+**1. JWT Token Authentication (This Codebase)**
+```ts
+// No session storage — token contains all info
+app.post("/login", (req, res) => {
+    const accessToken = jwt.sign(
+        {
+            userId: user.id,
+            email: user.email,
+            role: user.role,
+        },
+        process.env.JWT_ACCESS_SECRET,
+        { expiresIn: "15m" }
+    );
+
+    res.json({ accessToken }); // Client stores this
+});
+
+app.get("/profile", (req, res) => {
+    const token = req.headers.authorization?.split(" ")[1];
+
+    try {
+        // Stateless — verify without database lookup
+        const payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+        res.json({ userId: payload.userId });
+    } catch (err) {
+        res.status(401).send("Invalid token");
+    }
+});
+```
+
+**2. REST API Design**
+```ts
+// Every request is self-contained
+app.get("/api/users/:id", (req, res) => {
+    // No session state — request has everything needed
+    const userId = req.params.id;
+    const token = req.headers.authorization;
+
+    // Verify token (stateless)
+    const { userId: requesterId } = jwt.verify(token, secret);
+
+    // Fetch data
+    const user = db.getUser(userId);
+    res.json(user);
+});
+```
+
+**3. HTTP Protocol Itself**
+```
+GET /page.html HTTP/1.1
+Host: example.com
+```
+
+Each HTTP request is independent. The server doesn't remember if you visited before. Cookies and sessions were invented to add state on top of stateless HTTP.
+
+#### Advantages
+
+| Advantage | Explanation |
+|-----------|-------------|
+| **Simple scaling** | Any server can handle any request — no session affinity needed |
+| **No server memory** | Tokens stored client-side — server uses zero memory per user |
+| **No shared state** | No Redis/database required for session management |
+| **Failure resilience** | Server restart doesn't affect users — tokens still valid |
+| **Load balancer friendly** | Round-robin, least-connections — any strategy works |
+| **Microservices-ready** | Token can be verified by any service without central session store |
+| **CDN compatible** | Static responses can be cached aggressively |
+
+#### Disadvantages
+
+| Disadvantage | Explanation | Impact |
+|--------------|-------------|--------|
+| **Hard to revoke** | Token valid until expiry — can't invalidate early | If token leaks, attacker has access until expiration |
+| **Larger requests** | Every request includes full token (hundreds of bytes) | Slightly higher bandwidth usage |
+| **Can't update claims** | Token payload is fixed when issued | User role change won't take effect until new token |
+| **Expiration complexity** | Short expiry = frequent re-authentication | Requires refresh token pattern |
+| **No central view** | Can't list "all active sessions" | Harder to implement "log out all devices" |
+| **Limited payload size** | JWTs should stay small (< 1KB recommended) | Can't store large data in token |
+
+#### Caveats
+
+**1. "Stateless" Doesn't Mean Truly Zero State**
+
+Even with JWTs, you still have stateful components:
+- Database (stores users, data)
+- Refresh token storage (if using two-token pattern)
+- Rate limiting (tracks request counts per user)
+
+**Stateless auth** just means the access token verification doesn't require server-side storage.
+
+**2. Revocation Requires State**
+
+Pure stateless JWT has no way to revoke tokens early. Solutions:
+- Short expiration (15 min) limits damage
+- Token blacklist (but this reintroduces state!)
+- Refresh token rotation (hybrid approach)
+
+**3. Token Size Matters**
+
+JWTs are sent with every request:
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ1c2VyLTEiLCJlbWFpbCI6ImRlbW9AZXhhbXBsZS5jb20iLCJyb2xlIjoidXNlciIsImlhdCI6MTY5OTk5OTk5OSwiZXhwIjoxNjk5OTk5OTk5fQ.signature
+```
+
+Keep payload minimal. Don't store user's full profile in the token.
+
+### Hybrid Approach in This Codebase
+
+**This codebase combines stateless access tokens with stateful refresh tokens** — the best of both worlds.
+
+#### How JWT (Stateless) + RefreshTokenStore (Stateful) Work Together
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                         HYBRID AUTHENTICATION                              │
+│                  Stateless Access + Stateful Refresh                       │
+└───────────────────────────────────────────────────────────────────────────┘
+
+  Client                       Server                    RefreshTokenStore
+    │                            │                              │
+    │  POST /login               │                              │
+    │  { email, password }       │                              │
+    │ ────────────────────────►  │                              │
+    │                            │                              │
+    │                       Validate credentials                │
+    │                            │                              │
+    │                       Generate access token (JWT, 15 min) │
+    │                       [STATELESS — no storage]            │
+    │                       {                                   │
+    │                         userId: "user-1",                 │
+    │                         email: "user@example",            │
+    │                         exp: now + 15min                  │
+    │                       }                                   │
+    │                            │                              │
+    │                       Generate refresh token (JWT, 7 days)│
+    │                       [STATEFUL — stored server-side]     │
+    │                            │                              │
+    │                            │  Store refresh token         │
+    │                            │  tokenStore.set(userId, [{   │
+    │                            │    token: "xyz789",          │
+    │                            │    expiresAt: now + 7 days   │
+    │                            │  }])                         │
+    │                            │ ──────────────────────────►  │
+    │                            │                              │
+    │  { accessToken }           │                              │
+    │  Set-Cookie: refreshToken  │                              │
+    │ ◄──────────────────────────│                              │
+    │                            │                              │
+    │  Store accessToken in      │                              │
+    │  memory (React state)      │                              │
+    │                            │                              │
+    │  ─────── 10 minutes later ──────                          │
+    │                            │                              │
+    │  GET /api/data             │                              │
+    │  Authorization: Bearer     │                              │
+    │    <accessToken>           │                              │
+    │ ────────────────────────►  │                              │
+    │                            │                              │
+    │                       Verify JWT signature                │
+    │                       [STATELESS — no database lookup]    │
+    │                       Decode: { userId: "user-1" }        │
+    │                       Check expiration: valid             │
+    │                            │                              │
+    │  200 OK { data }           │                              │
+    │ ◄──────────────────────────│                              │
+    │                            │                              │
+    │  ─────── 5 minutes later (access token expired) ──────    │
+    │                            │                              │
+    │  GET /api/data             │                              │
+    │  Authorization: Bearer     │                              │
+    │    <expired accessToken>   │                              │
+    │ ────────────────────────►  │                              │
+    │                            │                              │
+    │                       JWT expired!                        │
+    │                            │                              │
+    │  401 Unauthorized          │                              │
+    │ ◄──────────────────────────│                              │
+    │                            │                              │
+    │  POST /auth/refresh        │                              │
+    │  Cookie: refreshToken      │                              │
+    │ ────────────────────────►  │                              │
+    │                            │                              │
+    │                       Read refresh token from cookie      │
+    │                       Verify JWT signature                │
+    │                            │                              │
+    │                            │  Check if token in store     │
+    │                            │  validate(userId, token)     │
+    │                            │ ──────────────────────────►  │
+    │                            │                              │
+    │                            │ ◄────────────────────────────│
+    │                            │  Found: true                 │
+    │                            │                              │
+    │                       [STATEFUL CHECK — server decides]   │
+    │                            │                              │
+    │                       Generate NEW access token           │
+    │                       [STATELESS — no storage]            │
+    │                            │                              │
+    │                       Generate NEW refresh token          │
+    │                       [STATEFUL — token rotation]         │
+    │                            │                              │
+    │                            │  Revoke old token            │
+    │                            │  Store new token             │
+    │                            │ ──────────────────────────►  │
+    │                            │                              │
+    │  { accessToken }           │                              │
+    │  Set-Cookie: refreshToken  │                              │
+    │    (new token)             │                              │
+    │ ◄──────────────────────────│                              │
+    │                            │                              │
+    │  Store new accessToken     │                              │
+    │  Retry original request    │                              │
+    └                            └                              ┘
+```
+
+#### Why This Hybrid is Common in Production
+
+| Concern | Solution | Type |
+|---------|----------|------|
+| **Frequent API calls** | Access token verified statelessly — no database lookup on every request | Stateless |
+| **Scaling** | Access token can be verified by any server — no session affinity | Stateless |
+| **Security (XSS)** | Access token in memory — lost on page reload | Stateless |
+| **Security (leaks)** | Access token expires in 15 min — short exposure window | Stateless |
+| **User experience** | Refresh token allows seamless re-authentication | Stateful |
+| **Revocation** | Refresh token stored server-side — can be invalidated instantly | Stateful |
+| **Multi-device** | Each device gets unique refresh token — can revoke per device | Stateful |
+| **Logout** | Revoke refresh token from store — user can't get new access tokens | Stateful |
+
+**Key insight:**
+
+Access tokens are **stateless** (fast, scalable) for the 99% case (API requests).
+
+Refresh tokens are **stateful** (controlled, revocable) for the 1% case (re-authentication, logout).
+
+#### Implementation in This Codebase
+
+**Stateless: Access Token Verification**
+```ts
+// AuthMiddleware.ts — runs on every API request
+export const verifyAccessToken = (req: Request, res: Response, next: NextFunction) => {
+    const token = req.headers.authorization?.split(" ")[1];
+
+    try {
+        // STATELESS — no database or Redis lookup
+        const payload = jwt.verify(token, config.authConfig.accessTokenSecret);
+        req.user = payload; // Attach to request
+        next();
+    } catch (err) {
+        res.status(401).json({ error: "Invalid token" });
+    }
+};
+```
+
+**Stateful: Refresh Token Validation**
+```ts
+// AuthController.ts — only on /auth/refresh
+const refresh = async (req: Request, res: Response) => {
+    const refreshToken = req.cookies.refreshToken;
+
+    // Step 1: Verify JWT (stateless)
+    const payload = jwt.verify(refreshToken, config.authConfig.refreshTokenSecret);
+
+    // Step 2: Check server-side store (stateful)
+    const isValid = authService.validate(payload.userId, refreshToken);
+    if (!isValid) {
+        return res.status(401).json({ error: "Token revoked or invalid" });
+    }
+
+    // Token is both valid (cryptographically) AND authorized (server allows it)
+    // ... generate new tokens ...
+};
+```
+
+**Stateful: Logout**
+```ts
+// AuthController.ts
+const logout = async (req: Request, res: Response) => {
+    const refreshToken = req.cookies.refreshToken;
+    const payload = jwt.verify(refreshToken, config.authConfig.refreshTokenSecret);
+
+    // STATEFUL — remove from server storage
+    authService.revoke(payload.userId, refreshToken);
+
+    // Clear cookie
+    res.clearCookie(config.authConfig.refreshTokenCookieName);
+    res.status(200).json({ message: "Logged out successfully" });
+};
+```
+
+**Trade-offs Visualized:**
+
+```
+API Request Performance
+───────────────────────
+Stateless (this codebase):
+  Request → JWT verify (no I/O) → Response
+  Time: < 1ms
+
+Stateful (traditional sessions):
+  Request → Redis lookup → Response
+  Time: 5-10ms (network round-trip)
+
+Revocation Speed
+────────────────
+Stateless (pure JWT):
+  Admin: "Revoke user's access!"
+  System: "Can't — token valid until expiry"
+  Time to effect: Up to 15 minutes
+
+Stateful (this codebase):
+  Admin: "Revoke user's access!"
+  System: "Revoked refresh token"
+  Time to effect: Immediate (user can't get new access tokens)
+  Existing access token: Still valid until expiry (max 15 min)
+
+Hybrid (best of both):
+  - Fast API requests (stateless access token)
+  - Controlled revocation (stateful refresh token)
+```
+
+### Decision Matrix: When to Choose Which
+
+| Scenario | Recommendation | Reason |
+|----------|---------------|--------|
+| **REST API** | Stateless (JWT) | Scales easily, no session storage |
+| **GraphQL API** | Stateless (JWT) | Same benefits as REST |
+| **Microservices** | Stateless (JWT) | Each service can verify independently |
+| **Serverless (AWS Lambda)** | Stateless (JWT) | No persistent memory between invocations |
+| **Real-time chat (WebSocket)** | Stateful | Requires persistent connections |
+| **Traditional web app (server-side rendering)** | Stateful (sessions) | Simpler, native to server-side frameworks |
+| **Mobile app API** | Stateless (JWT) | No cookie support, token-based auth natural |
+| **SPA (React, Vue)** | Hybrid (this codebase) | Fast API calls + controlled revocation |
+| **Multi-tenant SaaS** | Stateless (JWT) | Easier to scale per tenant |
+| **Banking/high-security** | Hybrid or Stateful | Need instant revocation capability |
+| **Public API (third-party devs)** | Stateless (API keys/JWTs) | No session management burden |
+| **Admin dashboard** | Stateful (sessions) | Rich session data, fine-grained control |
+
+**Decision Tree:**
+
+```
+Do you need instant revocation?
+├─► Yes
+│   ├─► Is performance critical?
+│   │   ├─► Yes → Hybrid (access: stateless, refresh: stateful)
+│   │   └─► No  → Stateful (sessions)
+│   └─► No data
+└─► No
+    ├─► Do you need to scale horizontally?
+    │   ├─► Yes → Stateless (JWT)
+    │   └─► No  → Either (sessions simpler for small apps)
+    └─► No data
+
+Do you have WebSockets or long-polling?
+├─► Yes → Stateful (connections must persist)
+└─► No  → Can use stateless
+
+Is this a serverless architecture?
+├─► Yes → Stateless (no persistent memory)
+└─► No  → Either
+```
+
+### Common Misconceptions
+
+#### Misconception 1: "Stateless means no database"
+
+**Wrong.** Stateless architecture just means the server doesn't remember previous requests. You still have a database for persistent data.
+
+```
+Stateless API:
+  Request 1: GET /users/123
+    → Verify JWT (no session lookup)
+    → Query database for user 123
+    → Return user data
+
+  Request 2: GET /users/123
+    → Verify JWT (no session lookup)
+    → Query database for user 123 (same query, fresh lookup)
+    → Return user data
+
+The server doesn't "remember" Request 1. Each request is independent.
+```
+
+**Right.** Stateless means no server-side session storage. Databases store long-term data, not transient session state.
+
+| Data Type | Storage | Architecture |
+|-----------|---------|--------------|
+| User account | Database | Both stateful and stateless use this |
+| Shopping cart (permanent) | Database | Both stateful and stateless use this |
+| Current session (who's logged in) | Session store (Redis) | Stateful only |
+| JWT access token | Client-side (memory) | Stateless only |
+| Refresh token | Server storage | Stateful (even in hybrid) |
+
+#### Misconception 2: "JWTs are always stateless"
+
+**Wrong.** JWTs CAN be stateless, but this codebase uses them in a stateful way for refresh tokens.
+
+```ts
+// Stateless JWT (access token — this codebase)
+const accessToken = jwt.sign({ userId }, secret, { expiresIn: "15m" });
+// No server-side storage. Verification only checks signature + expiration.
+
+// Stateful JWT (refresh token — this codebase)
+const refreshToken = jwt.sign({ userId }, secret, { expiresIn: "7d" });
+RefreshTokenStore.store(userId, refreshToken); // Stored server-side!
+// Verification checks signature AND server-side storage.
+```
+
+**Right.** JWTs are a data format (signed JSON). They can be used statelessly OR statefully depending on architecture.
+
+#### Misconception 3: "Stateless is always better for scaling"
+
+**Wrong.** It depends on your use case.
+
+**Stateless advantages:**
+- Horizontal scaling (any server handles any request)
+- No session replication
+- Simpler infrastructure
+
+**Stateful advantages:**
+- Instant revocation (logout takes effect immediately)
+- Rich session data (store complex objects server-side)
+- Fine-grained control (rate limiting per user is easier)
+
+**Right.** Stateless is better for **read-heavy APIs**. Stateful is better for **real-time, connection-oriented apps**.
+
+```
+Stateless shines:
+  - Public API with 10,000 req/sec
+  - Microservices with auto-scaling
+  - CDN-cached responses
+
+Stateful shines:
+  - WebSocket chat with 1,000 concurrent connections
+  - Admin dashboard with complex session data
+  - Banking app requiring instant logout
+```
+
+#### Misconception 4: "Refresh tokens make the system stateless"
+
+**Wrong.** Refresh tokens (in this codebase) are explicitly stateful. They're stored server-side and checked on every refresh.
+
+```ts
+// This is STATEFUL
+const validate = (userId: string, token: string): boolean => {
+    const tokens = tokenStore.get(userId); // Server-side lookup
+    return tokens?.some((t) => t.token === token) ?? false;
+};
+```
+
+**Right.** This codebase is **hybrid**:
+- Access tokens: stateless (verified without storage)
+- Refresh tokens: stateful (checked against server storage)
+
+#### Misconception 5: "HTTP is stateless, so APIs must be too"
+
+**Wrong.** HTTP is stateless (each request is independent), but you can build stateful applications on top of it.
+
+**HTTP itself:**
+```
+GET /page HTTP/1.1
+Host: example.com
+```
+No memory of previous requests.
+
+**Stateful layer on top:**
+```
+GET /page HTTP/1.1
+Host: example.com
+Cookie: sessionId=abc123
+```
+Server looks up session and "remembers" who you are.
+
+**Right.** HTTP is the transport protocol (stateless). Your application architecture (stateful vs stateless) is a separate design decision.
 
 ---
