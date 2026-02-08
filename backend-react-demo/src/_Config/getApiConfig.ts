@@ -29,7 +29,11 @@ export const getApiConfig = (): ApiConfig => {
             authConfig: {
                 ..._apiConfig.authConfig,
                 cookieMaxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
-            }
+            },
+            cookieSettings: {
+                ..._apiConfig.cookieSettings,
+                maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
+            },
         }
 
         API_CONFIG_MAP.set(API_CONFIG_NAME, _apiConfig);

@@ -24,5 +24,11 @@
     },
     "demoSettings": {
         "useMockData": true
+    },
+    "cookieSettings": {
+        "httpOnly": true,
+        "secure": false,
+        "sameSite": "lax",
+        "path": "/"
     }
 }

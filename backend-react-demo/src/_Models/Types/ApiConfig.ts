@@ -27,4 +27,11 @@ export type ApiConfig = {
     demoSettings: {
         useMockData: boolean;
     }
+    cookieSettings: {
+        httpOnly: boolean;
+        secure: boolean;
+        sameSite: string;
+        maxAge?: number;
+        path: string;
+    }
 }
